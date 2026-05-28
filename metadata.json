@@ -1,0 +1,6 @@
+{
+  "name": "Monthly Tour Diary",
+  "description": "An Android application to prepare, manage, and export monthly tour diaries, with optical character recognition for logbooks and requisition letters powered by Gemini.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
