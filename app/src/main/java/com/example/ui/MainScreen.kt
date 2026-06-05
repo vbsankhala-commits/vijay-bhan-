@@ -73,7 +73,9 @@ fun MainScreen(viewModel: TourViewModel) {
     val ocrError by viewModel.ocrError.collectAsState()
     val ocrResult by viewModel.ocrResult.collectAsState()
 
-    var activeTab by remember { mutableIntStateOf(0) } // 0: History & PDF, 1: Add New, 2: Profile
+    val sharedPrefs = remember { context.getSharedPreferences("TOUR_DIARY_FORM_PREFS", android.content.Context.MODE_PRIVATE) }
+
+    var activeTab by remember { mutableIntStateOf(sharedPrefs.getInt("activeTab", 0)) } // 0: Diary, 1: Journeys, 2: Cases, 3: Add, 4: Profile
 
     var showSplashScreen by remember { mutableStateOf(true) }
     LaunchedEffect(Unit) {
@@ -82,22 +84,91 @@ fun MainScreen(viewModel: TourViewModel) {
     }
 
     // Form states
-    var dateInput by remember { mutableStateOf("") }
-    var arrDateInput by remember { mutableStateOf("") }
-    var depTimeInput by remember { mutableStateOf("") }
-    var arrTimeInput by remember { mutableStateOf("") }
-    var travelModeInput by remember { mutableStateOf("") }
-    var distanceInput by remember { mutableStateOf("") }
-    var csNoInput by remember { mutableStateOf("") }
-    var firNoInput by remember { mutableStateOf("") }
-    var psInput by remember { mutableStateOf("") }
-    var districtInput by remember { mutableStateOf("") }
-    var reportDateInput by remember { mutableStateOf("") }
-    var remarksInput by remember { mutableStateOf("") }
-    var formCases by remember { mutableStateOf(listOf(FormCase())) }
+    var dateInput by remember { mutableStateOf(sharedPrefs.getString("dateInput", "") ?: "") }
+    var arrDateInput by remember { mutableStateOf(sharedPrefs.getString("arrDateInput", "") ?: "") }
+    var depTimeInput by remember { mutableStateOf(sharedPrefs.getString("depTimeInput", "") ?: "") }
+    var arrTimeInput by remember { mutableStateOf(sharedPrefs.getString("arrTimeInput", "") ?: "") }
+    var travelModeInput by remember { mutableStateOf(sharedPrefs.getString("travelModeInput", "") ?: "") }
+    var distanceInput by remember { mutableStateOf(sharedPrefs.getString("distanceInput", "") ?: "") }
+    var csNoInput by remember { mutableStateOf(sharedPrefs.getString("csNoInput", "") ?: "") }
+    var firNoInput by remember { mutableStateOf(sharedPrefs.getString("firNoInput", "") ?: "") }
+    var psInput by remember { mutableStateOf(sharedPrefs.getString("psInput", "") ?: "") }
+    var districtInput by remember { mutableStateOf(sharedPrefs.getString("districtInput", "") ?: "") }
+    var reportDateInput by remember { mutableStateOf(sharedPrefs.getString("reportDateInput", "") ?: "") }
+    var remarksInput by remember { mutableStateOf(sharedPrefs.getString("remarksInput", "") ?: "") }
+    var formCases by remember {
+        val json = sharedPrefs.getString("formCases", "") ?: ""
+        val initialCases = if (json.isNotBlank()) {
+            try {
+                val listType = com.squareup.moshi.Types.newParameterizedType(List::class.java, FormCase::class.java)
+                val adapter = com.squareup.moshi.Moshi.Builder()
+                    .addLast(com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory())
+                    .build()
+                    .adapter<List<FormCase>>(listType)
+                adapter.fromJson(json)
+            } catch (e: Exception) {
+                null
+            }
+        } else {
+            null
+        }
+        mutableStateOf(initialCases ?: listOf(FormCase()))
+    }
+    var isRoundTripManual by remember { mutableStateOf(sharedPrefs.getBoolean("isRoundTripManual", false)) }
+
+    // Auto-save form draft whenever any of the form states change or the active tab changes
+    LaunchedEffect(
+        dateInput,
+        arrDateInput,
+        depTimeInput,
+        arrTimeInput,
+        travelModeInput,
+        distanceInput,
+        csNoInput,
+        firNoInput,
+        psInput,
+        districtInput,
+        reportDateInput,
+        remarksInput,
+        formCases,
+        isRoundTripManual,
+        activeTab
+    ) {
+        sharedPrefs.edit().apply {
+            putString("dateInput", dateInput)
+            putString("arrDateInput", arrDateInput)
+            putString("depTimeInput", depTimeInput)
+            putString("arrTimeInput", arrTimeInput)
+            putString("travelModeInput", travelModeInput)
+            putString("distanceInput", distanceInput)
+            putString("csNoInput", csNoInput)
+            putString("firNoInput", firNoInput)
+            putString("psInput", psInput)
+            putString("districtInput", districtInput)
+            putString("reportDateInput", reportDateInput)
+            putString("remarksInput", remarksInput)
+            putBoolean("isRoundTripManual", isRoundTripManual)
+            putInt("activeTab", activeTab)
+            
+            try {
+                val listType = com.squareup.moshi.Types.newParameterizedType(List::class.java, FormCase::class.java)
+                val adapter = com.squareup.moshi.Moshi.Builder()
+                    .addLast(com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory())
+                    .build()
+                    .adapter<List<FormCase>>(listType)
+                val json = adapter.toJson(formCases)
+                putString("formCases", json)
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+            apply()
+        }
+    }
 
     // Dialog state for PDF settings
     var showPdfExportDialog by remember { mutableStateOf(false) }
+    var pdfExportDialogInitialReportType by remember { mutableStateOf(0) }
+    var showIfmsBotDialog by remember { mutableStateOf(false) }
     var showProfileEditDialog by remember { mutableStateOf(false) }
     var editingTourEntry by remember { mutableStateOf<TourEntry?>(null) }
 
@@ -300,34 +371,162 @@ fun MainScreen(viewModel: TourViewModel) {
             )
         },
         bottomBar = {
-            NavigationBar(
-                windowInsets = WindowInsets.navigationBars,
-                containerColor = Color(0xFFF3EDF7)
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .windowInsetsPadding(WindowInsets.navigationBars)
+                    .padding(start = 16.dp, end = 16.dp, bottom = 12.dp)
             ) {
-                NavigationBarItem(
-                    selected = activeTab == 0,
-                    onClick = { activeTab = 0 },
-                    icon = { Icon(Icons.Filled.List, contentDescription = "Diary") },
-                    label = { Text("Diary View") }
-                )
-                NavigationBarItem(
-                    selected = activeTab == 1,
-                    onClick = { activeTab = 1 },
-                    icon = { Icon(Icons.Filled.Star, contentDescription = "Cases") },
-                    label = { Text("Cases") }
-                )
-                NavigationBarItem(
-                    selected = activeTab == 2,
-                    onClick = { activeTab = 2 },
-                    icon = { Icon(Icons.Filled.Add, contentDescription = "Add Trip") },
-                    label = { Text("Log Entry") }
-                )
-                NavigationBarItem(
-                    selected = activeTab == 3,
-                    onClick = { activeTab = 3 },
-                    icon = { Icon(Icons.Filled.Person, contentDescription = "Profile") },
-                    label = { Text("Profile") }
-                )
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(72.dp),
+                    shape = RoundedCornerShape(24.dp),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.95f)
+                    ),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 8.dp),
+                    border = BorderStroke(
+                        width = 1.dp,
+                        color = MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)
+                    )
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxSize(),
+                        horizontalArrangement = Arrangement.SpaceEvenly,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        // Icon 0: Diary View
+                        val selected0 = activeTab == 0
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.Center,
+                            modifier = Modifier
+                                .weight(1f)
+                                .fillMaxHeight()
+                                .clip(RoundedCornerShape(20.dp))
+                                .clickable { activeTab = 0 }
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.List,
+                                contentDescription = "Diary View",
+                                tint = if (selected0) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                                modifier = Modifier.size(if (selected0) 26.dp else 22.dp)
+                            )
+                            Spacer(modifier = Modifier.height(2.dp))
+                            Text(
+                                text = "Diary",
+                                fontSize = 10.sp,
+                                fontWeight = if (selected0) FontWeight.ExtraBold else FontWeight.Medium,
+                                color = if (selected0) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                            )
+                        }
+
+                        // Icon 1: Journeys
+                        val selected1 = activeTab == 1
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.Center,
+                            modifier = Modifier
+                                .weight(1.1f)
+                                .fillMaxHeight()
+                                .clip(RoundedCornerShape(20.dp))
+                                .clickable { activeTab = 1 }
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.DirectionsCar,
+                                contentDescription = "Journeys",
+                                tint = if (selected1) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                                modifier = Modifier.size(if (selected1) 26.dp else 22.dp)
+                            )
+                            Spacer(modifier = Modifier.height(2.dp))
+                            Text(
+                                text = "Journeys",
+                                fontSize = 10.sp,
+                                fontWeight = if (selected1) FontWeight.ExtraBold else FontWeight.Medium,
+                                color = if (selected1) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                            )
+                        }
+
+                        // Icon 2: Cases
+                        val selected2 = activeTab == 2
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.Center,
+                            modifier = Modifier
+                                .weight(1f)
+                                .fillMaxHeight()
+                                .clip(RoundedCornerShape(20.dp))
+                                .clickable { activeTab = 2 }
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.Star,
+                                contentDescription = "Cases",
+                                tint = if (selected2) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                                modifier = Modifier.size(if (selected2) 26.dp else 22.dp)
+                            )
+                            Spacer(modifier = Modifier.height(2.dp))
+                            Text(
+                                text = "Cases",
+                                fontSize = 10.sp,
+                                fontWeight = if (selected2) FontWeight.ExtraBold else FontWeight.Medium,
+                                color = if (selected2) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                            )
+                        }
+
+                        // Icon 3: Log Entry
+                        val selected3 = activeTab == 3
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.Center,
+                            modifier = Modifier
+                                .weight(1.1f)
+                                .fillMaxHeight()
+                                .clip(RoundedCornerShape(20.dp))
+                                .clickable { activeTab = 3 }
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.Add,
+                                contentDescription = "Log Entry",
+                                tint = if (selected3) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                                modifier = Modifier.size(if (selected3) 26.dp else 22.dp)
+                            )
+                            Spacer(modifier = Modifier.height(2.dp))
+                            Text(
+                                text = "Log Entry",
+                                fontSize = 10.sp,
+                                fontWeight = if (selected3) FontWeight.ExtraBold else FontWeight.Medium,
+                                color = if (selected3) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                            )
+                        }
+
+                        // Icon 4: Profile
+                        val selected4 = activeTab == 4
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.Center,
+                            modifier = Modifier
+                                .weight(1f)
+                                .fillMaxHeight()
+                                .clip(RoundedCornerShape(20.dp))
+                                .clickable { activeTab = 4 }
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.Person,
+                                contentDescription = "Profile",
+                                tint = if (selected4) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                                modifier = Modifier.size(if (selected4) 26.dp else 22.dp)
+                            )
+                            Spacer(modifier = Modifier.height(2.dp))
+                            Text(
+                                text = "Profile",
+                                fontSize = 10.sp,
+                                fontWeight = if (selected4) FontWeight.ExtraBold else FontWeight.Medium,
+                                color = if (selected4) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                            )
+                        }
+                    }
+                }
             }
         }
     ) { innerPadding ->
@@ -344,12 +543,26 @@ fun MainScreen(viewModel: TourViewModel) {
                     availableMonths = availableMonths,
                     selectedMonth = selectedMonth,
                     filteredEntries = filteredEntries,
-                    onExportPdfClicked = { showPdfExportDialog = true },
+                    onExportPdfClicked = { 
+                        pdfExportDialogInitialReportType = 0
+                        showPdfExportDialog = true 
+                    },
+                    onGenerateTaReportClicked = {
+                        pdfExportDialogInitialReportType = 1
+                        showPdfExportDialog = true
+                    },
+                    onOpenIfmsBot = { showIfmsBotDialog = true },
                     onRequestEditProfile = { showProfileEditDialog = true },
-                    onEditEntry = { editingTourEntry = it }
+                    onEditEntry = { editingTourEntry = it },
+                    onDuplicateEntry = { editingTourEntry = it }
                 )
-                1 -> CasesTab(viewModel = viewModel)
-                2 -> AddEntryTab(
+                1 -> FilledJourneysTab(
+                    viewModel = viewModel,
+                    onEditEntry = { editingTourEntry = it },
+                    onDuplicateEntry = { editingTourEntry = it }
+                )
+                2 -> CasesTab(viewModel = viewModel)
+                3 -> AddEntryTab(
                     viewModel = viewModel,
                     ocrLoading = ocrLoading,
                     ocrError = ocrError,
@@ -375,6 +588,8 @@ fun MainScreen(viewModel: TourViewModel) {
                     onRepDateChange = { reportDateInput = it },
                     remarksVal = remarksInput,
                     onRemarksChange = { remarksInput = it },
+                    isRoundTripManualVal = isRoundTripManual,
+                    onRoundTripManualChange = { isRoundTripManual = it },
                     onLaunchPicker = { documentPickerLauncher.launch("*/*") },
                     onLaunchMultiplePicker = { multipleDocsPickerLauncher.launch("*/*") },
                     onClearOcr = { viewModel.clearOcrState() },
@@ -386,21 +601,38 @@ fun MainScreen(viewModel: TourViewModel) {
                         } else {
                             val distDouble = distanceInput.toDoubleOrNull() ?: 0.0
                             val repDate = reportDateInput.ifBlank { dateInput }
-                            
-                            viewModel.saveTourEntry(
-                                date = dateInput,
-                                depTime = depTimeInput,
-                                arrTime = arrTimeInput,
-                                travelMode = travelModeInput,
-                                distance = distDouble,
-                                csNumber = serialized["csNumber"] ?: "",
-                                firNumber = serialized["firNumber"] ?: "",
-                                policeStation = finalPs,
-                                district = serialized["district"] ?: "",
-                                reportDate = repDate,
-                                remarks = remarksInput,
-                                arrDate = arrDateInput
-                            )
+                              
+                            if (isRoundTripManual) {
+                                viewModel.saveRajasthanRoundTripEntry(
+                                    date = dateInput,
+                                    depTime = depTimeInput,
+                                    arrTime = arrTimeInput,
+                                    travelMode = travelModeInput,
+                                    distance = distDouble,
+                                    csNumber = serialized["csNumber"] ?: "",
+                                    firNumber = serialized["firNumber"] ?: "",
+                                    policeStation = finalPs,
+                                    district = serialized["district"] ?: "",
+                                    reportDate = repDate,
+                                    remarks = remarksInput,
+                                    arrDate = arrDateInput
+                                )
+                            } else {
+                                viewModel.saveTourEntry(
+                                    date = dateInput,
+                                    depTime = depTimeInput,
+                                    arrTime = arrTimeInput,
+                                    travelMode = travelModeInput,
+                                    distance = distDouble,
+                                    csNumber = serialized["csNumber"] ?: "",
+                                    firNumber = serialized["firNumber"] ?: "",
+                                    policeStation = finalPs,
+                                    district = serialized["district"] ?: "",
+                                    reportDate = repDate,
+                                    remarks = remarksInput,
+                                    arrDate = arrDateInput
+                                )
+                            }
                             Toast.makeText(context, "Journey entry saved successfully!", Toast.LENGTH_SHORT).show()
                             
                             // Clear form and switch to history view
@@ -413,34 +645,59 @@ fun MainScreen(viewModel: TourViewModel) {
                             formCases = listOf(FormCase())
                             reportDateInput = ""
                             remarksInput = ""
+                            isRoundTripManual = false
                             viewModel.clearOcrState()
                             activeTab = 0
                         }
                     }
                 )
-                3 -> ProfileTab(
+                4 -> ProfileTab(
                     profile = profile,
-                    onSaveProfile = { name, des, posting ->
-                        viewModel.saveProfile(name, des, posting)
+                    viewModel = viewModel,
+                    onSaveProfile = { name, des, posting, geminiKey, backupEmail, basicSalary, taCategory ->
+                        viewModel.saveProfile(name, des, posting, geminiKey, backupEmail, basicSalary, taCategory)
                         Toast.makeText(context, "Employee Profile Updated!", Toast.LENGTH_SHORT).show()
                     }
                 )
             }
 
-            // PDF Export Settings & Actions Overlay Dialog
+            // Export tour diary dialog (Support both PDF and Word .doc formats)
             if (showPdfExportDialog) {
                 PdfExportDialog(
                     selectedMonth = selectedMonth,
+                    initialReportType = pdfExportDialogInitialReportType,
                     onDismiss = { showPdfExportDialog = false },
-                    onConfirm = { isLegal ->
+                    onConfirmPdf = { isLegal, docType ->
                         showPdfExportDialog = false
-                        val file = viewModel.createMonthlyDiaryPdf(context, selectedMonth, isLegal)
+                        val file = if (docType == 1) {
+                            viewModel.createRajasthanTaBillPdf(context, selectedMonth, isLegal)
+                        } else {
+                            viewModel.createMonthlyDiaryPdf(context, selectedMonth, isLegal)
+                        }
                         if (file != null) {
                             sharePdfFile(context, file)
                         } else {
                             Toast.makeText(context, "Failed to build PDF. Please try again.", Toast.LENGTH_SHORT).show()
                         }
+                    },
+                    onConfirmWord = {
+                        showPdfExportDialog = false
+                        val file = viewModel.createMonthlyDiaryDoc(context, selectedMonth)
+                        if (file != null) {
+                            shareDocFile(context, file)
+                        } else {
+                            Toast.makeText(context, "Failed to build Word file. Please try again.", Toast.LENGTH_SHORT).show()
+                        }
                     }
+                )
+            }
+
+            if (showIfmsBotDialog) {
+                IfmsAutoFillBotDialog(
+                    selectedMonth = selectedMonth,
+                    profile = profile,
+                    entries = filteredEntries,
+                    onDismiss = { showIfmsBotDialog = false }
                 )
             }
 
@@ -449,8 +706,8 @@ fun MainScreen(viewModel: TourViewModel) {
                 ProfileEditDialog(
                     profile = profile,
                     onDismiss = { showProfileEditDialog = false },
-                    onSaveProfile = { name, designation, posting ->
-                        viewModel.saveProfile(name, designation, posting)
+                    onSaveProfile = { name, designation, posting, salary, category ->
+                        viewModel.saveProfile(name, designation, posting, null, null, salary, category)
                         Toast.makeText(context, "Employee Profile Updated!", Toast.LENGTH_SHORT).show()
                     }
                 )
@@ -460,10 +717,21 @@ fun MainScreen(viewModel: TourViewModel) {
             if (editingTourEntry != null) {
                 TourEntryEditDialog(
                     entry = editingTourEntry!!,
+                    profile = profile,
                     onDismiss = { editingTourEntry = null },
                     onSave = { updatedEntry ->
-                        viewModel.updateTourEntry(updatedEntry)
-                        Toast.makeText(context, "Journey Entry Updated!", Toast.LENGTH_SHORT).show()
+                        if (updatedEntry.id == 0L) {
+                            viewModel.saveTourEntry(updatedEntry)
+                            Toast.makeText(context, "Copied Journey Inserted Successfully!", Toast.LENGTH_SHORT).show()
+                        } else {
+                            viewModel.updateTourEntry(updatedEntry)
+                            Toast.makeText(context, "Journey Entry Updated!", Toast.LENGTH_SHORT).show()
+                        }
+                    },
+                    onDelete = {
+                        viewModel.deleteTourEntry(editingTourEntry!!)
+                        editingTourEntry = null
+                        Toast.makeText(context, "Journey Entry Deleted Successfully.", Toast.LENGTH_SHORT).show()
                     }
                 )
             }
@@ -477,13 +745,13 @@ fun TableHeaderCell(text: String, width: Dp) {
     Box(
         modifier = Modifier
             .width(width)
-            .padding(horizontal = 4.dp),
+            .padding(horizontal = 6.dp, vertical = 12.dp),
         contentAlignment = Alignment.Center
     ) {
         Text(
             text = text,
-            fontSize = 11.sp,
-            fontWeight = FontWeight.Bold,
+            fontSize = 12.sp,
+            fontWeight = FontWeight.ExtraBold,
             color = Color(0xFF21005D),
             textAlign = TextAlign.Center
         )
@@ -501,12 +769,12 @@ fun TableDataCell(
     Box(
         modifier = Modifier
             .width(width)
-            .padding(horizontal = 4.dp),
+            .padding(horizontal = 6.dp, vertical = 8.dp),
         contentAlignment = if (alignLeft) Alignment.CenterStart else Alignment.Center
     ) {
         Text(
             text = text.ifBlank { "-" },
-            fontSize = 11.sp,
+            fontSize = 12.sp,
             fontWeight = if (isBold) FontWeight.Bold else FontWeight.Normal,
             color = if (isSNo) MaterialTheme.colorScheme.primary else Color(0xFF1D1B20),
             textAlign = if (alignLeft) TextAlign.Start else TextAlign.Center,
@@ -535,8 +803,11 @@ fun DiaryListTab(
     selectedMonth: String,
     filteredEntries: List<TourEntry>,
     onExportPdfClicked: () -> Unit,
+    onGenerateTaReportClicked: () -> Unit,
+    onOpenIfmsBot: () -> Unit,
     onRequestEditProfile: () -> Unit,
-    onEditEntry: (TourEntry) -> Unit
+    onEditEntry: (TourEntry) -> Unit,
+    onDuplicateEntry: (TourEntry) -> Unit
 ) {
     val entriesCountByMonth by viewModel.entriesCountByMonth.collectAsState()
 
@@ -873,36 +1144,160 @@ fun DiaryListTab(
                             fontWeight = FontWeight.Medium
                         )
                     }
+                }
 
-                    // Action button footer inside the card (Printable format)
+                Divider(
+                    color = Color(0xFFCAC4D0).copy(alpha = 0.4f),
+                    thickness = 0.8.dp,
+                    modifier = Modifier.padding(vertical = 4.dp)
+                )
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
                     Button(
                         onClick = onExportPdfClicked,
                         colors = ButtonDefaults.buttonColors(
                             containerColor = Color(0xFF6750A4), 
                             contentColor = Color.White
                         ),
-                        shape = RoundedCornerShape(12.dp)
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier.weight(1f)
                     ) {
-                        Icon(Icons.Filled.Share, contentDescription = "Export PDF Icon", modifier = Modifier.size(16.dp))
-                        Spacer(modifier = Modifier.width(6.dp))
+                        Icon(Icons.Filled.PictureAsPdf, contentDescription = "Export Diary Icon", modifier = Modifier.size(15.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
                         Text(
-                            "Export PDF",
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.Medium
+                            "Export Diary",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+
+                    Button(
+                        onClick = onGenerateTaReportClicked,
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = Color(0xFF006874), 
+                            contentColor = Color.White
+                        ),
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Icon(Icons.Filled.AccountBalanceWallet, contentDescription = "TA Report Icon", modifier = Modifier.size(15.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(
+                            "TA Report (PDF)",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(4.dp))
+
+                Button(
+                    onClick = onOpenIfmsBot,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.tertiary,
+                        contentColor = MaterialTheme.colorScheme.onTertiary
+                    ),
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Icon(Icons.Filled.AutoMode, contentDescription = "IFMS Bot Icon", modifier = Modifier.size(16.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        "Rajasthan IFMS 3.0 TA Auto-Fill Bot",
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            }
+        }
+
+        // State for list view mode (Card view as default for better mobile ergonomics, with Table toggle)
+        var listViewMode by remember { mutableStateOf("card") } // "card" or "table"
+
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(bottom = 10.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = "${formatMonthYear(selectedMonth)} Journeys",
+                fontWeight = FontWeight.Bold,
+                fontSize = 14.sp,
+                color = MaterialTheme.colorScheme.primary
+            )
+
+            // Segmented Control Switcher
+            Row(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(Color(0xFFF3EDF7))
+                    .padding(3.dp),
+                horizontalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                // Card View Button
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(6.dp))
+                        .background(if (listViewMode == "card") Color(0xFFEADDFF) else Color.Transparent)
+                        .clickable { listViewMode = "card" }
+                        .padding(horizontal = 10.dp, vertical = 4.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.List,
+                            contentDescription = "Card Mode",
+                            tint = if (listViewMode == "card") Color(0xFF21005D) else Color(0xFF49454F),
+                            modifier = Modifier.size(14.dp)
+                        )
+                        Text(
+                            text = "Cards",
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = if (listViewMode == "card") Color(0xFF21005D) else Color(0xFF49454F)
+                        )
+                    }
+                }
+
+                // Table View Button
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(6.dp))
+                        .background(if (listViewMode == "table") Color(0xFFEADDFF) else Color.Transparent)
+                        .clickable { listViewMode = "table" }
+                        .padding(horizontal = 10.dp, vertical = 4.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.Menu,
+                            contentDescription = "Table Mode",
+                            tint = if (listViewMode == "table") Color(0xFF21005D) else Color(0xFF49454F),
+                            modifier = Modifier.size(14.dp)
+                        )
+                        Text(
+                            text = "Table",
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = if (listViewMode == "table") Color(0xFF21005D) else Color(0xFF49454F)
                         )
                     }
                 }
             }
         }
-
-        // Entries List or Table
-        Text(
-            text = "${formatMonthYear(selectedMonth)} Journeys",
-            fontWeight = FontWeight.Bold,
-            fontSize = 14.sp,
-            color = MaterialTheme.colorScheme.primary,
-            modifier = Modifier.padding(bottom = 8.dp)
-        )
 
         if (filteredEntries.isEmpty()) {
             Box(
@@ -924,129 +1319,285 @@ fun DiaryListTab(
                 }
             }
         } else {
-            // Elegant Table Layout with consecutive Serial Numbers
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .weight(1f)
-                    .border(1.dp, Color(0xFFCAC4D0).copy(alpha = 0.8f), RoundedCornerShape(12.dp))
-                    .clip(RoundedCornerShape(12.dp))
-                    .background(Color.White)
-            ) {
-                // Wrap in local horizontal scroll container so table forms a wide spreadsheet grid!
-                Row(
+            if (listViewMode == "card") {
+                LazyColumn(
                     modifier = Modifier
-                        .fillMaxSize()
-                        .horizontalScroll(rememberScrollState())
+                        .fillMaxWidth()
+                        .weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                    contentPadding = PaddingValues(bottom = 12.dp)
                 ) {
-                    Column {
-                        // 1. Table Header Row (Material 3 style)
-                        Row(
-                            modifier = Modifier
-                                .background(Color(0xFFF3EDF7)) // Primary container-style background
-                                .padding(vertical = 10.dp, horizontal = 4.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            TableHeaderCell("S.No.", 55.dp)
-                            TableHeaderCell("Dep. Date", 100.dp)
-                            TableHeaderCell("Dep. Time", 85.dp)
-                            TableHeaderCell("Arr. Date", 100.dp)
-                            TableHeaderCell("Arr. Time", 85.dp)
-                            TableHeaderCell("Mode", 100.dp)
-                            TableHeaderCell("Dist (km)", 70.dp)
-                            TableHeaderCell("C.S. No.", 110.dp)
-                            TableHeaderCell("FIR No.", 90.dp)
-                            TableHeaderCell("Police Station", 130.dp)
-                            TableHeaderCell("District", 90.dp)
-                            TableHeaderCell("Rep. Date", 85.dp)
-                            TableHeaderCell("Action", 120.dp)
-                        }
+                    items(filteredEntries, key = { it.id }) { entry ->
+                        TourEntryCard(
+                            entry = entry,
+                            onEdit = { onEditEntry(entry) },
+                            onDelete = { viewModel.deleteTourEntry(entry) },
+                            onDuplicate = { onDuplicateEntry(entry.copy(id = 0L)) }
+                        )
+                    }
+                }
+            } else {
+                // Elegant Table Layout with consecutive Serial Numbers
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f)
+                        .border(1.dp, Color(0xFFCAC4D0).copy(alpha = 0.8f), RoundedCornerShape(12.dp))
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(Color.White)
+                ) {
+                    // Wrap in local horizontal scroll container so table forms a wide spreadsheet grid!
+                    Row(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .horizontalScroll(rememberScrollState())
+                    ) {
+                        Column {
+                            // 1. Table Header Row (Material 3 style)
+                            Row(
+                                modifier = Modifier
+                                    .background(Color(0xFFF3EDF7)) // Primary container-style background
+                                    .padding(vertical = 10.dp, horizontal = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                TableHeaderCell("S.No.", 55.dp)
+                                TableHeaderCell("Dep. Date", 100.dp)
+                                TableHeaderCell("Dep. Time", 85.dp)
+                                TableHeaderCell("Arr. Date", 100.dp)
+                                TableHeaderCell("Arr. Time", 85.dp)
+                                TableHeaderCell("Mode", 100.dp)
+                                TableHeaderCell("Dist (km)", 70.dp)
+                                TableHeaderCell("C.S. No.", 110.dp)
+                                TableHeaderCell("FIR No.", 90.dp)
+                                TableHeaderCell("Police Station", 130.dp)
+                                TableHeaderCell("District", 90.dp)
+                                TableHeaderCell("Rep. Date", 85.dp)
+                                TableHeaderCell("Action", 120.dp)
+                            }
 
-                        Divider(color = Color(0xFFCAC4D0), thickness = 1.dp)
+                            Divider(color = Color(0xFFCAC4D0), thickness = 1.dp)
 
-                        // 2. Table Data Rows inside vertical scroll container
-                        LazyColumn(
-                            modifier = Modifier.fillMaxHeight(),
-                            verticalArrangement = Arrangement.Top
-                        ) {
-                            itemsIndexed(filteredEntries, key = { _, item -> item.id }) { index, entry ->
-                                Row(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .clickable { onEditEntry(entry) }
-                                        .padding(horizontal = 4.dp, vertical = 6.dp),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    // Highlight S.No (sequential number to all entries in month)
-                                    TableDataCell((index + 1).toString(), 55.dp, isBold = true, isSNo = true)
-                                    TableDataCell(formatDateView(entry.date), 100.dp)
-                                    TableDataCell(entry.depTime, 85.dp)
-                                    TableDataCell(formatDateView(entry.arrDate.ifBlank { entry.date }), 100.dp)
-                                    TableDataCell(entry.arrTime, 85.dp)
-                                    TableDataCell(entry.travelMode, 100.dp)
-                                    TableDataCell(String.format(Locale.getDefault(), "%.1f", entry.distance), 70.dp)
-                                    TableDataCell(entry.csNumber, 110.dp)
-                                    TableDataCell(entry.firNumber, 90.dp)
-                                    TableDataCell(entry.policeStation, 130.dp, alignLeft = true)
-                                    TableDataCell(entry.district, 90.dp, alignLeft = true)
-                                    TableDataCell(formatDateView(entry.reportDate), 85.dp)
-
-                                    // Action: Edit & Delete side-by-side
+                            // 2. Table Data Rows inside vertical scroll container
+                            LazyColumn(
+                                modifier = Modifier.fillMaxHeight(),
+                                verticalArrangement = Arrangement.Top
+                            ) {
+                                itemsIndexed(filteredEntries, key = { _, item -> item.id }) { index, entry ->
                                     Row(
-                                        modifier = Modifier.width(120.dp),
-                                        horizontalArrangement = Arrangement.Center,
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .clickable { onEditEntry(entry) }
+                                            .padding(horizontal = 4.dp, vertical = 6.dp),
                                         verticalAlignment = Alignment.CenterVertically
                                     ) {
-                                        IconButton(
-                                            onClick = { onEditEntry(entry) },
-                                            modifier = Modifier.size(36.dp)
+                                        // Highlight S.No (sequential number to all entries in month)
+                                        TableDataCell((index + 1).toString(), 55.dp, isBold = true, isSNo = true)
+                                        TableDataCell(formatDateView(entry.date), 100.dp)
+                                        TableDataCell(entry.depTime, 85.dp)
+                                        TableDataCell(formatDateView(entry.arrDate.ifBlank { entry.date }), 100.dp)
+                                        TableDataCell(entry.arrTime, 85.dp)
+                                        TableDataCell(entry.travelMode, 100.dp)
+                                        TableDataCell(String.format(Locale.getDefault(), "%.1f", entry.distance), 70.dp)
+                                        TableDataCell(entry.csNumber, 110.dp)
+                                        TableDataCell(entry.firNumber, 90.dp)
+                                        TableDataCell(entry.policeStation, 130.dp, alignLeft = true)
+                                        TableDataCell(entry.district, 90.dp, alignLeft = true)
+                                        TableDataCell(formatDateView(entry.reportDate), 85.dp)
+
+                                        // Action: Edit & Delete side-by-side
+                                        Row(
+                                            modifier = Modifier.width(120.dp),
+                                            horizontalArrangement = Arrangement.Center,
+                                            verticalAlignment = Alignment.CenterVertically
                                         ) {
-                                            Icon(
-                                                imageVector = Icons.Filled.Edit,
-                                                contentDescription = "Edit entry",
-                                                tint = MaterialTheme.colorScheme.primary,
-                                                modifier = Modifier.size(18.dp)
-                                            )
-                                        }
-                                        IconButton(
-                                            onClick = { viewModel.deleteTourEntry(entry) },
-                                            modifier = Modifier.size(36.dp)
-                                        ) {
-                                            Icon(
-                                                imageVector = Icons.Filled.Delete,
-                                                contentDescription = "Delete entry",
-                                                tint = Color(0xFFBA1A1A),
-                                                modifier = Modifier.size(18.dp)
-                                            )
+                                            IconButton(
+                                                onClick = { onEditEntry(entry) },
+                                                modifier = Modifier.size(36.dp)
+                                            ) {
+                                                Icon(
+                                                    imageVector = Icons.Filled.Edit,
+                                                    contentDescription = "Edit entry",
+                                                    tint = MaterialTheme.colorScheme.primary,
+                                                    modifier = Modifier.size(18.dp)
+                                                )
+                                            }
+                                            IconButton(
+                                                onClick = { viewModel.deleteTourEntry(entry) },
+                                                modifier = Modifier.size(36.dp)
+                                            ) {
+                                                Icon(
+                                                    imageVector = Icons.Filled.Delete,
+                                                    contentDescription = "Delete entry",
+                                                    tint = Color(0xFFBA1A1A),
+                                                    modifier = Modifier.size(18.dp)
+                                                )
+                                            }
                                         }
                                     }
-                                }
 
-                                Divider(color = Color(0xFFCAC4D0).copy(alpha = 0.5f), thickness = 0.5.dp)
+                                    Divider(color = Color(0xFFCAC4D0).copy(alpha = 0.5f), thickness = 0.5.dp)
+                                }
                             }
                         }
                     }
                 }
             }
         }
-        Spacer(modifier = Modifier.height(12.dp))
-        Box(
-            modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
-            contentAlignment = Alignment.Center
+    }
+}
+
+@Composable
+fun FilledJourneysTab(
+    viewModel: TourViewModel,
+    onEditEntry: (TourEntry) -> Unit,
+    onDuplicateEntry: (TourEntry) -> Unit
+) {
+    val allEntries by viewModel.allTourEntries.collectAsState()
+    var searchQuery by remember { mutableStateOf("") }
+
+    val filteredAll = remember(allEntries, searchQuery) {
+        if (searchQuery.isBlank()) {
+            allEntries
+        } else {
+            val q = searchQuery.lowercase(Locale.getDefault())
+            allEntries.filter {
+                it.policeStation.lowercase(Locale.getDefault()).contains(q) ||
+                it.csNumber.lowercase(Locale.getDefault()).contains(q) ||
+                it.firNumber.lowercase(Locale.getDefault()).contains(q) ||
+                it.district.lowercase(Locale.getDefault()).contains(q) ||
+                it.date.contains(q) ||
+                it.travelMode.lowercase(Locale.getDefault()).contains(q) ||
+                it.remarks.lowercase(Locale.getDefault()).contains(q)
+            }
+        }
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(16.dp)
+    ) {
+        Text(
+            text = "Filled Journeys",
+            fontWeight = FontWeight.Bold,
+            fontSize = 22.sp,
+            color = MaterialTheme.colorScheme.primary
+        )
+        Text(
+            text = "Inspect, search, edit, or remove all logged travels in one place",
+            fontSize = 12.sp,
+            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f),
+            modifier = Modifier.padding(bottom = 12.dp)
+        )
+
+        // Sleek Search Bar
+        OutlinedTextField(
+            value = searchQuery,
+            onValueChange = { searchQuery = it },
+            placeholder = { Text("Search logs by station, C.S. No, mode, date...") },
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(bottom = 12.dp),
+            leadingIcon = {
+                Icon(Icons.Filled.Search, contentDescription = "Search icon")
+            },
+            trailingIcon = {
+                if (searchQuery.isNotBlank()) {
+                    IconButton(onClick = { searchQuery = "" }) {
+                        Icon(Icons.Filled.Clear, contentDescription = "Clear search")
+                    }
+                }
+            },
+            singleLine = true,
+            shape = RoundedCornerShape(12.dp),
+            colors = OutlinedTextFieldDefaults.colors(
+                focusedBorderColor = MaterialTheme.colorScheme.primary,
+                unfocusedBorderColor = Color(0xFFCAC4D0)
+            )
+        )
+
+        // Summary of results and reset option
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(bottom = 8.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
-                text = "Developed by Vijay Bhan Sankhala",
-                fontSize = 11.sp,
+                text = "Showing ${filteredAll.size} of ${allEntries.size} trips",
+                fontSize = 12.sp,
                 fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.primary.copy(alpha = 0.7f),
-                letterSpacing = 0.5.sp
+                color = MaterialTheme.colorScheme.secondary
             )
+            if (searchQuery.isNotBlank()) {
+                Text(
+                    text = "Clear Filters",
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.clickable { searchQuery = "" }
+                )
+            }
+        }
+
+        if (filteredAll.isEmpty()) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f),
+                contentAlignment = Alignment.Center
+            ) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Icon(
+                        imageVector = Icons.Filled.DirectionsCar,
+                        contentDescription = "No match",
+                        modifier = Modifier.size(64.dp),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
+                    )
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Text(
+                        text = if (allEntries.isEmpty()) "No journeys found" else "No matching journeys",
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 15.sp
+                    )
+                    Text(
+                        text = if (allEntries.isEmpty()) "Logged travels will be listed here. Tap Log Entry to add!" else "Try typing a different keyword or date series",
+                        fontSize = 11.sp,
+                        color = Color.Gray,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.padding(start = 24.dp, end = 24.dp, top = 4.dp)
+                    )
+                }
+            }
+        } else {
+            LazyColumn(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+                contentPadding = PaddingValues(bottom = 16.dp)
+            ) {
+                items(filteredAll, key = { it.id }) { entry ->
+                    TourEntryCard(
+                        entry = entry,
+                        onEdit = { onEditEntry(entry) },
+                        onDelete = { viewModel.deleteTourEntry(entry) },
+                        onDuplicate = { onDuplicateEntry(entry.copy(id = 0L)) }
+                    )
+                }
+            }
         }
     }
 }
 
 @Composable
-fun TourEntryCard(entry: TourEntry, onDelete: () -> Unit) {
+fun TourEntryCard(
+    entry: TourEntry,
+    onEdit: () -> Unit,
+    onDelete: () -> Unit,
+    onDuplicate: () -> Unit
+) {
     val dateParts = entry.date.split("-")
     val dayText = if (dateParts.size >= 3) dateParts[2] else ""
     val monthNoText = if (dateParts.size >= 2) dateParts[1] else ""
@@ -1063,74 +1614,93 @@ fun TourEntryCard(entry: TourEntry, onDelete: () -> Unit) {
         "10" -> "Oct"
         "11" -> "Nov"
         "12" -> "Dec"
-        else -> "Oct"
+        else -> "Jan"
+    }
+
+    val travelIcon = when {
+        entry.travelMode.contains("bike", ignoreCase = true) || entry.travelMode.contains("motorcycle", ignoreCase = true) || entry.travelMode.contains("two", ignoreCase = true) -> Icons.Filled.TwoWheeler
+        entry.travelMode.contains("bus", ignoreCase = true) -> Icons.Filled.DirectionsBus
+        entry.travelMode.contains("train", ignoreCase = true) -> Icons.Filled.Train
+        else -> Icons.Filled.DirectionsCar
     }
 
     Card(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(vertical = 4.dp),
-        shape = RoundedCornerShape(16.dp),
+            .padding(vertical = 6.dp),
+        shape = RoundedCornerShape(20.dp),
         colors = CardDefaults.cardColors(containerColor = Color.White),
-        border = BorderStroke(1.dp, Color(0xFFCAC4D0)),
-        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
+        border = BorderStroke(1.5.dp, MaterialTheme.colorScheme.primaryContainer),
+        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
     ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(14.dp),
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                .padding(16.dp),
+            horizontalArrangement = Arrangement.spacedBy(16.dp),
             verticalAlignment = Alignment.Top
         ) {
-            // Left Calendar Badge
+            // Enlarged Calendar Badge
             Box(
                 modifier = Modifier
-                    .size(48.dp)
-                    .clip(RoundedCornerShape(12.dp))
-                    .background(Color(0xFFF3EDF7)),
+                    .size(60.dp)
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(MaterialTheme.colorScheme.primaryContainer),
                 contentAlignment = Alignment.Center
             ) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     Text(
                         text = if (dayText.isNotBlank()) dayText else "??",
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = Color(0xFF6750A4),
-                        lineHeight = 14.sp
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight.ExtraBold,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer,
+                        lineHeight = 18.sp
                     )
                     Text(
                         text = monthShortName.uppercase(),
-                        fontSize = 9.sp,
+                        fontSize = 11.sp,
                         fontWeight = FontWeight.Black,
-                        color = Color(0xFF6750A4),
-                        lineHeight = 10.sp
+                        color = MaterialTheme.colorScheme.onPrimaryContainer,
+                        lineHeight = 12.sp
+                    )
+                    Spacer(modifier = Modifier.height(2.dp))
+                    Icon(
+                        imageVector = travelIcon,
+                        contentDescription = "Travel Mode",
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(14.dp)
                     )
                 }
             }
 
-            // Center content columns
+            // Center details
             Column(
                 modifier = Modifier
-                    .weight(1f)
-                    .align(Alignment.CenterVertically),
-                verticalArrangement = Arrangement.spacedBy(6.dp)
+                    .weight(1f),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                // Header: Crime Scene Number & Police Station prominent!
+                // Header: Police Station (Enlarged with Location Icon)
                 Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
+                    Icon(
+                        imageVector = Icons.Filled.LocationOn,
+                        contentDescription = "Location",
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(18.dp)
+                    )
                     Text(
-                        text = if (entry.policeStation.isNotBlank()) "P.S. ${entry.policeStation}" else "No Station Recorded",
-                        fontSize = 15.sp,
+                        text = if (entry.policeStation.isNotBlank()) "P.S. ${entry.policeStation}" else "No Station",
+                        fontSize = 17.sp,
                         fontWeight = FontWeight.ExtraBold,
-                        color = Color(0xFF21005D),
-                        modifier = Modifier.weight(1f)
+                        color = MaterialTheme.colorScheme.onSurface,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis
                     )
                 }
 
-                // Subtitle: CS Number & FIR details
+                // Badges row: CS No & FIR Number
                 Row(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalAlignment = Alignment.CenterVertically
@@ -1138,105 +1708,161 @@ fun TourEntryCard(entry: TourEntry, onDelete: () -> Unit) {
                     if (entry.csNumber.isNotBlank()) {
                         Box(
                             modifier = Modifier
-                                .clip(RoundedCornerShape(6.dp))
-                                .background(Color(0xFFF3EDF7))
-                                .border(0.5.dp, Color(0xFF6750A4), RoundedCornerShape(6.dp))
-                                .padding(horizontal = 6.dp, vertical = 2.dp)
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(MaterialTheme.colorScheme.secondaryContainer)
+                                .border(1.dp, MaterialTheme.colorScheme.secondary, RoundedCornerShape(8.dp))
+                                .padding(horizontal = 8.dp, vertical = 4.dp)
                         ) {
                             Text(
                                 text = "C.S. No: ${entry.csNumber}",
-                                fontSize = 11.sp,
+                                fontSize = 12.sp,
                                 fontWeight = FontWeight.Bold,
-                                color = Color(0xFF6750A4)
+                                color = MaterialTheme.colorScheme.onSecondaryContainer
                             )
                         }
                     }
                     if (entry.firNumber.isNotBlank()) {
                         Box(
                             modifier = Modifier
-                                .clip(RoundedCornerShape(6.dp))
-                                .background(Color(0xFFE8DEF8))
-                                .padding(horizontal = 6.dp, vertical = 2.dp)
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(Color(0xFFEADDFF))
+                                .border(1.dp, Color(0xFF6750A4), RoundedCornerShape(8.dp))
+                                .padding(horizontal = 8.dp, vertical = 4.dp)
                         ) {
                             Text(
-                                text = "FIR: #${entry.firNumber}",
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.Medium,
-                                color = Color(0xFF49454F)
+                                text = "FIR: ${entry.firNumber}",
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color(0xFF21005D)
                             )
                         }
                     }
                 }
 
-                // Departure & Arrival Timeline Row (Makes TOD/TOR incredibly readable!)
+                // Timeline Row (Enlarged and highlighted with Icons)
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .background(Color(0xFFF9F9FA), RoundedCornerShape(8.dp))
-                        .padding(horizontal = 8.dp, vertical = 6.dp),
+                        .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f), RoundedCornerShape(12.dp))
+                        .border(1.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f), RoundedCornerShape(12.dp))
+                        .padding(horizontal = 12.dp, vertical = 8.dp),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Column {
-                        Text("DEPARTURE", fontSize = 8.sp, fontWeight = FontWeight.SemiBold, color = Color.Gray)
-                        Text(entry.depTime.ifBlank { "--:--" }, fontSize = 13.sp, fontWeight = FontWeight.Bold, color = Color(0xFF1D1B20))
+                        Text(
+                            text = "DEPARTURE", 
+                            fontSize = 9.sp, 
+                            fontWeight = FontWeight.Bold, 
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                            letterSpacing = 0.5.sp
+                        )
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Icon(Icons.Filled.Schedule, contentDescription = "Time", modifier = Modifier.size(12.dp), tint = Color.Gray)
+                            Text(entry.depTime.ifBlank { "--:--" }, fontSize = 15.sp, fontWeight = FontWeight.ExtraBold, color = MaterialTheme.colorScheme.onSurface)
+                        }
                     }
+                    
                     Icon(
-                        imageVector = Icons.Filled.PlayArrow,
+                        imageVector = Icons.Filled.ArrowForward,
                         contentDescription = "to",
-                        tint = Color(0xFF6750A4).copy(alpha = 0.6f),
-                        modifier = Modifier.size(16.dp)
+                        tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.8f),
+                        modifier = Modifier.size(20.dp)
                     )
+
                     Column(horizontalAlignment = Alignment.End) {
-                        Text("ARRIVAL", fontSize = 8.sp, fontWeight = FontWeight.SemiBold, color = Color.Gray)
-                        Text(entry.arrTime.ifBlank { "--:--" }, fontSize = 13.sp, fontWeight = FontWeight.Bold, color = Color(0xFF1D1B20))
+                        Text(
+                            text = "ARRIVAL", 
+                            fontSize = 9.sp, 
+                            fontWeight = FontWeight.Bold, 
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                            letterSpacing = 0.5.sp
+                        )
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Text(entry.arrTime.ifBlank { "--:--" }, fontSize = 15.sp, fontWeight = FontWeight.ExtraBold, color = MaterialTheme.colorScheme.onSurface)
+                            Icon(Icons.Filled.Schedule, contentDescription = "Time", modifier = Modifier.size(12.dp), tint = Color.Gray)
+                        }
                     }
                 }
 
-                // Additional details row: District, Mode & Distance
+                // District, Mode & Distance prominent footer
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
-                        text = "Dist: ${entry.district.ifBlank { "Jhunjhunu" }} | ${entry.travelMode}",
-                        fontSize = 11.sp,
-                        color = Color(0xFF49454F),
-                        fontWeight = FontWeight.Normal,
+                        text = "Dist: ${entry.district.ifBlank { "N/A" }} • ${entry.travelMode}",
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.weight(1f)
                     )
-                    
-                    // Distance indicator badge
+
+                    Spacer(modifier = Modifier.width(4.dp))
+
+                    // Distance Badge (Enlarged)
                     Box(
                         modifier = Modifier
-                            .clip(RoundedCornerShape(4.dp))
-                            .background(Color(0xFFEADDFF))
-                            .padding(horizontal = 6.dp, vertical = 2.dp)
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(MaterialTheme.colorScheme.primary)
+                            .padding(horizontal = 8.dp, vertical = 4.dp)
                     ) {
                         Text(
-                            text = "+${entry.distance} KM",
-                            fontSize = 10.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = Color(0xFF21005D)
+                            text = "${entry.distance} KM",
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Black,
+                            color = MaterialTheme.colorScheme.onPrimary
                         )
                     }
                 }
             }
 
-            // Right Delete Button
-            IconButton(
-                onClick = onDelete,
-                modifier = Modifier
-                    .size(28.dp)
-                    .align(Alignment.Top)
+            // Right actions: taller touch targets, high clickability
+            Column(
+                modifier = Modifier.align(Alignment.Top),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                Icon(
-                    imageVector = Icons.Filled.Delete,
-                    contentDescription = "Delete entry",
-                    tint = Color(0xFFBA1A1A),
-                    modifier = Modifier.size(18.dp)
-                )
+                IconButton(
+                    onClick = onEdit,
+                    modifier = Modifier
+                        .size(38.dp)
+                        .background(MaterialTheme.colorScheme.surfaceVariant, CircleShape)
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.Edit,
+                        contentDescription = "Edit travel entry",
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
+                IconButton(
+                    onClick = onDuplicate,
+                    modifier = Modifier
+                        .size(38.dp)
+                        .background(MaterialTheme.colorScheme.secondaryContainer, CircleShape)
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.ContentCopy,
+                        contentDescription = "Duplicate travel entry",
+                        tint = MaterialTheme.colorScheme.onSecondaryContainer,
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
+                IconButton(
+                    onClick = onDelete,
+                    modifier = Modifier
+                        .size(38.dp)
+                        .background(MaterialTheme.colorScheme.errorContainer, CircleShape)
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.Delete,
+                        contentDescription = "Delete travel entry",
+                        tint = MaterialTheme.colorScheme.onErrorContainer,
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
             }
         }
     }
@@ -1247,7 +1873,7 @@ fun UploadedItemCard(
     item: UploadItem,
     onUpdate: (UploadItem) -> Unit,
     onRemove: () -> Unit,
-    onSave: () -> Unit
+    onSave: (isRoundTrip: Boolean) -> Unit
 ) {
     val context = LocalContext.current
     Card(
@@ -1487,7 +2113,26 @@ fun UploadedItemCard(
                     maxLines = 2
                 )
 
-                Spacer(modifier = Modifier.height(4.dp))
+                // Round trip toggle row for Rajasthan Rules
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.2f), RoundedCornerShape(8.dp))
+                        .padding(horizontal = 10.dp, vertical = 6.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("Auto 40 km/h Round-Trip Split", fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.primary)
+                        Text("Generates outward + return legs automatically.", fontSize = 9.sp, color = Color.Gray)
+                    }
+                    Switch(
+                        checked = item.isRoundTrip,
+                        onCheckedChange = { onUpdate(item.copy(isRoundTrip = it)) }
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(6.dp))
 
                 // Save button
                 Row(
@@ -1499,7 +2144,7 @@ fun UploadedItemCard(
                             if (item.date.isBlank() || item.policeStation.isBlank()) {
                                 Toast.makeText(context, "Trip Date and Police Station are required fields!", Toast.LENGTH_LONG).show()
                             } else {
-                                onSave()
+                                onSave(item.isRoundTrip)
                             }
                         },
                         colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
@@ -1663,7 +2308,12 @@ fun JourneyCasesSection(
                             value = itemCase.policeStation,
                             onValueChange = { newVal ->
                                 val newList = cases.toMutableList()
-                                newList[index] = itemCase.copy(policeStation = newVal)
+                                val autoDistrict = com.example.utils.RajasthanPoliceHelper.getDistrict(newVal)
+                                val finalDistrict = if (!autoDistrict.isNullOrBlank() && itemCase.district.isBlank()) autoDistrict else itemCase.district
+                                newList[index] = itemCase.copy(
+                                    policeStation = newVal,
+                                    district = finalDistrict
+                                )
                                 onCasesChange(newList)
                             },
                             label = { Text("Police Station", fontSize = 10.sp) },
@@ -1728,6 +2378,8 @@ fun AddEntryTab(
     onRepDateChange: (String) -> Unit,
     remarksVal: String,
     onRemarksChange: (String) -> Unit,
+    isRoundTripManualVal: Boolean,
+    onRoundTripManualChange: (Boolean) -> Unit,
     onLaunchPicker: () -> Unit,
     onLaunchMultiplePicker: () -> Unit,
     onClearOcr: () -> Unit,
@@ -1735,6 +2387,7 @@ fun AddEntryTab(
 ) {
     val context = LocalContext.current
     val uploadItems by viewModel.uploadItems.collectAsState()
+    val profile by viewModel.profile.collectAsState()
 
     LazyColumn(
         modifier = Modifier
@@ -1758,14 +2411,14 @@ fun AddEntryTab(
                         )
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
-                            "Intelligent Upload & AI OCR",
+                            "Unlimited Batch Upload & AI Extraction",
                             fontWeight = FontWeight.Bold,
                             fontSize = 15.sp,
                             color = MaterialTheme.colorScheme.onSecondaryContainer
                         )
                     }
                     Text(
-                        "Upload requisition letters, FSL reports, case sheets, or vehicle logs. Gemini will auto-extract every detail into fully editable diary records!",
+                        "Upload unlimited requisition letters, FSL reports, or vehicle logbook pages in batch. Gemini OCR will automatically extract all fields and auto-fill them into your diary entries!",
                         fontSize = 11.sp,
                         color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.8f),
                         modifier = Modifier.padding(top = 4.dp, bottom = 12.dp)
@@ -1782,7 +2435,7 @@ fun AddEntryTab(
                         ) {
                             Icon(Icons.Filled.Add, contentDescription = "Add Files", modifier = Modifier.size(18.dp))
                             Spacer(modifier = Modifier.width(6.dp))
-                            Text("Select File(s)", fontSize = 13.sp)
+                            Text("Batch Upload (Unlimited)", fontSize = 12.sp)
                         }
 
                         Button(
@@ -1840,7 +2493,7 @@ fun AddEntryTab(
                                     onClick = {
                                         val itemsToSave = uploadItems.filter { !it.isLoading && it.error == null && it.date.isNotBlank() && it.policeStation.isNotBlank() }
                                         itemsToSave.forEach { item ->
-                                            viewModel.saveUploadItemToDiary(item.id) { }
+                                            viewModel.saveUploadItemToDiary(item.id, isRoundTrip = item.isRoundTrip) { }
                                         }
                                         Toast.makeText(context, "Saved $completedCount journey logs successfully!", Toast.LENGTH_LONG).show()
                                     },
@@ -1867,8 +2520,8 @@ fun AddEntryTab(
                 item = item,
                 onUpdate = { viewModel.updateUploadItem(it) },
                 onRemove = { viewModel.removeUploadItem(item.id) },
-                onSave = {
-                    viewModel.saveUploadItemToDiary(item.id) { success ->
+                onSave = { roundTrip ->
+                    viewModel.saveUploadItemToDiary(item.id, isRoundTrip = roundTrip) { success ->
                         if (success) {
                             Toast.makeText(context, "Saved journey for ${item.policeStation} successfully!", Toast.LENGTH_SHORT).show()
                         }
@@ -2189,6 +2842,51 @@ fun AddEntryTab(
                                 )
                             }
                         }
+
+                        // Distance entry method helper (Manual vs Google Map KM)
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f), RoundedCornerShape(8.dp))
+                                .padding(8.dp)
+                        ) {
+                            Text(
+                                "KM Method:", 
+                                fontSize = 11.sp, 
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.weight(1f)
+                            )
+                            
+                            AssistChip(
+                                onClick = { /* User types in the input above */ },
+                                label = { Text("Manual", fontSize = 10.sp) },
+                                leadingIcon = { Icon(Icons.Filled.Edit, "manual icon", modifier = Modifier.size(12.dp)) },
+                                colors = AssistChipDefaults.assistChipColors(containerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.05f))
+                            )
+                            
+                            val stations = casesList.map { it.policeStation }.filter { it.isNotBlank() }
+                            AssistChip(
+                                onClick = {
+                                    val hq = if (profile.posting.isNotBlank()) profile.posting else "HQ"
+                                    val gDist = com.example.utils.RajasthanPoliceHelper.getGoogleMapsDistance(hq, stations)
+                                    if (gDist > 0.0) {
+                                        onDistChange(String.format(Locale.US, "%.1f", gDist))
+                                        Toast.makeText(context, "Calculated via Google Maps ($hq ➔ ${stations.joinToString(" ➔ ") { "PS $it" }} ➔ $hq): $gDist km", Toast.LENGTH_LONG).show()
+                                    } else {
+                                        Toast.makeText(context, "Please enter visited Police Station(s) to fetch Google Maps distance!", Toast.LENGTH_SHORT).show()
+                                    }
+                                },
+                                label = { Text("As per Google Map", fontSize = 10.sp) },
+                                leadingIcon = { Icon(Icons.Filled.Place, "maps icon", modifier = Modifier.size(12.dp), tint = MaterialTheme.colorScheme.primary) },
+                                colors = AssistChipDefaults.assistChipColors(
+                                    containerColor = MaterialTheme.colorScheme.primaryContainer,
+                                    labelColor = MaterialTheme.colorScheme.onPrimaryContainer
+                                )
+                            )
+                        }
                     }
                 }
             }
@@ -2201,6 +2899,26 @@ fun AddEntryTab(
                 label = { Text("Extra Remarks & Travel Details") },
                 modifier = Modifier.fillMaxWidth()
             )
+        }
+
+        item {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.2f), RoundedCornerShape(8.dp))
+                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("Auto 40 km/h Round-Trip Split", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.primary)
+                    Text("Logs outward + return trip segments automatically.", fontSize = 10.sp, color = Color.Gray)
+                }
+                Switch(
+                    checked = isRoundTripManualVal,
+                    onCheckedChange = onRoundTripManualChange
+                )
+            }
         }
 
         item {
@@ -2224,11 +2942,31 @@ fun AddEntryTab(
 @Composable
 fun ProfileTab(
     profile: EmployeeProfile,
-    onSaveProfile: (String, String, String) -> Unit
+    viewModel: TourViewModel,
+    onSaveProfile: (String, String, String, String, String, Int, String) -> Unit
 ) {
+    val context = LocalContext.current
     var nameState by remember(profile) { mutableStateOf(profile.name) }
     var designationState by remember(profile) { mutableStateOf(profile.designation) }
     var postingState by remember(profile) { mutableStateOf(profile.posting) }
+    var geminiApiKeyState by remember(profile) { mutableStateOf(profile.geminiApiKey) }
+    var backupEmailState by remember(profile) { mutableStateOf(profile.cloudBackupEmail) }
+    var basicSalaryState by remember(profile) { mutableStateOf(profile.basicSalary.toString()) }
+    var taCategoryState by remember(profile) { mutableStateOf(profile.taCategory) }
+
+    val fileImportLauncher = rememberLauncherForActivityResult(
+        contract = androidx.activity.result.contract.ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri != null) {
+            viewModel.importBackupFromJson(context, uri) { success ->
+                if (success) {
+                    Toast.makeText(context, "Backup Restored Successfully!", Toast.LENGTH_LONG).show()
+                } else {
+                    Toast.makeText(context, "Failed to Restore Backup.", Toast.LENGTH_LONG).show()
+                }
+            }
+        }
+    }
 
     Column(
         modifier = Modifier
@@ -2275,6 +3013,50 @@ fun ProfileTab(
             placeholder = { Text("e.g. Mobile Forensic Unit Jodhpur") }
         )
 
+        OutlinedTextField(
+            value = basicSalaryState,
+            onValueChange = {
+                basicSalaryState = it
+                val sal = it.trim().toIntOrNull() ?: 38000
+                taCategoryState = com.example.utils.RajasthanTaRules.getCategoryBySalary(sal)
+            },
+            label = { Text("Basic Salary (Pay Matrix)") },
+            leadingIcon = { Icon(Icons.Filled.Star, contentDescription = "Basic Salary") },
+            modifier = Modifier.fillMaxWidth(),
+            keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+                keyboardType = androidx.compose.ui.text.input.KeyboardType.Number
+            ),
+            placeholder = { Text("e.g. 38000") }
+        )
+
+        // Category selection dropdown
+        var categoryExpanded by remember { mutableStateOf(false) }
+        Box {
+            OutlinedTextField(
+                value = "Category $taCategoryState (DA Rate: ₹${com.example.utils.RajasthanTaRules.getFullDaRate(taCategoryState).toInt()}/day)",
+                onValueChange = {},
+                readOnly = true,
+                label = { Text("Rajasthan TA Rules Category") },
+                leadingIcon = { Icon(Icons.Filled.Info, contentDescription = "Category") },
+                trailingIcon = { IconButton(onClick = { categoryExpanded = true }) { Icon(Icons.Filled.ArrowDropDown, "Select") } },
+                modifier = Modifier.fillMaxWidth().clickable { categoryExpanded = true }
+            )
+            DropdownMenu(
+                expanded = categoryExpanded,
+                onDismissRequest = { categoryExpanded = false }
+            ) {
+                listOf("A", "B", "C", "D", "E").forEach { cat ->
+                    DropdownMenuItem(
+                        text = { Text("Category $cat (Full DA Rate: ₹${com.example.utils.RajasthanTaRules.getFullDaRate(cat).toInt()})") },
+                        onClick = {
+                            taCategoryState = cat
+                            categoryExpanded = false
+                        }
+                    )
+                }
+            }
+        }
+
         // Mock Representation of output Signature block
         Card(
             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
@@ -2290,10 +3072,96 @@ fun ProfileTab(
             }
         }
 
-        Spacer(modifier = Modifier.height(24.dp))
+        Divider(color = Color(0xFFCAC4D0).copy(alpha = 0.4f), modifier = Modifier.padding(vertical = 4.dp))
+
+        Text(
+            "Cloud Sync & Backup",
+            fontWeight = FontWeight.Bold,
+            fontSize = 14.sp,
+            color = MaterialTheme.colorScheme.primary
+        )
+        Text(
+            "Back up and sync your forensic travel indices and crime scene portfolios to Google Cloud/Gmail securely. Works offline by gathering files and online by loading/saving from Drive/Attachments.",
+            fontSize = 11.sp,
+            color = Color.Gray
+        )
+
+        OutlinedTextField(
+            value = backupEmailState,
+            onValueChange = { backupEmailState = it },
+            label = { Text("Backup Gmail Address") },
+            leadingIcon = { Icon(Icons.Filled.Email, contentDescription = "Email") },
+            modifier = Modifier.fillMaxWidth(),
+            placeholder = { Text("e.g. yourname@gmail.com") },
+            singleLine = true
+        )
+
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Button(
+                onClick = {
+                    if (backupEmailState.isBlank() || !backupEmailState.contains("@")) {
+                        Toast.makeText(context, "Please enter a valid backup Gmail address first.", Toast.LENGTH_SHORT).show()
+                    } else {
+                        viewModel.exportBackupToJson(context, backupEmailState)
+                    }
+                },
+                modifier = Modifier.weight(1.2f),
+                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.tertiary),
+                shape = RoundedCornerShape(8.dp)
+            ) {
+                Icon(Icons.Filled.Share, contentDescription = "Export Backup", modifier = Modifier.size(14.dp))
+                Spacer(modifier = Modifier.width(4.dp))
+                Text("Backup via Gmail", fontSize = 10.sp, fontWeight = FontWeight.Bold)
+            }
+
+            Button(
+                onClick = {
+                    fileImportLauncher.launch(arrayOf("application/json", "*/*"))
+                },
+                modifier = Modifier.weight(0.8f),
+                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.secondary),
+                shape = RoundedCornerShape(8.dp)
+            ) {
+                Icon(Icons.Filled.ArrowUpward, contentDescription = "Import Backup", modifier = Modifier.size(14.dp))
+                Spacer(modifier = Modifier.width(4.dp))
+                Text("Restore", fontSize = 10.sp, fontWeight = FontWeight.Bold)
+            }
+        }
+
+        Divider(color = Color(0xFFCAC4D0).copy(alpha = 0.4f), modifier = Modifier.padding(vertical = 4.dp))
+
+        Text(
+            "API Keys & OCR settings",
+            fontWeight = FontWeight.Bold,
+            fontSize = 14.sp,
+            color = MaterialTheme.colorScheme.primary
+        )
+        Text(
+            "If you receive a forbidden (HTTP 403 Forbidden) warning or quota issues from Google AI Studio, provide your private key below to run OCR commands independently.",
+            fontSize = 11.sp,
+            color = Color.Gray
+        )
+
+        OutlinedTextField(
+            value = geminiApiKeyState,
+            onValueChange = { geminiApiKeyState = it },
+            label = { Text("Custom Gemini API Key") },
+            leadingIcon = { Icon(Icons.Filled.Lock, contentDescription = "API Key") },
+            modifier = Modifier.fillMaxWidth(),
+            placeholder = { Text("AI Studio Gemini API Key") },
+            singleLine = true
+        )
+
+        Spacer(modifier = Modifier.height(8.dp))
 
         Button(
-            onClick = { onSaveProfile(nameState, designationState, postingState) },
+            onClick = {
+                val salInt = basicSalaryState.toIntOrNull() ?: 38000
+                onSaveProfile(nameState, designationState, postingState, geminiApiKeyState, backupEmailState, salInt, taCategoryState)
+            },
             modifier = Modifier
                 .fillMaxWidth()
                 .height(48.dp),
@@ -2301,7 +3169,31 @@ fun ProfileTab(
         ) {
             Icon(Icons.Filled.Done, contentDescription = "Confirm profile changes")
             Spacer(modifier = Modifier.width(6.dp))
-            Text("Update Profile", fontWeight = FontWeight.Bold, fontSize = 15.sp)
+            Text("Update settings", fontWeight = FontWeight.Bold, fontSize = 15.sp)
+        }
+
+        OutlinedButton(
+            onClick = {
+                nameState = ""
+                designationState = ""
+                postingState = ""
+                geminiApiKeyState = ""
+                backupEmailState = ""
+                basicSalaryState = "38000"
+                taCategoryState = "D"
+                onSaveProfile("", "", "", "", "", 38000, "D")
+                Toast.makeText(context, "Employee Profile details cleared successfully!", Toast.LENGTH_SHORT).show()
+            },
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(48.dp),
+            colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error),
+            border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.error),
+            shape = RoundedCornerShape(8.dp)
+        ) {
+            Icon(Icons.Filled.Delete, contentDescription = "Clear Profile Info", modifier = Modifier.size(18.dp))
+            Spacer(modifier = Modifier.width(6.dp))
+            Text("Clear Profile Info", fontWeight = FontWeight.Bold, fontSize = 15.sp)
         }
     }
 }
@@ -2309,71 +3201,227 @@ fun ProfileTab(
 @Composable
 fun PdfExportDialog(
     selectedMonth: String,
+    initialReportType: Int = 0,
     onDismiss: () -> Unit,
-    onConfirm: (isLegal: Boolean) -> Unit
+    onConfirmPdf: (isLegal: Boolean, reportType: Int) -> Unit,
+    onConfirmWord: () -> Unit
 ) {
     var selectedLegalSize by remember { mutableStateOf(false) } // Default Letter Size (false), Legal Size (true)
+    var activeExportTab by remember { mutableStateOf(0) } // 0 = PDF, 1 = Word
+    var reportType by remember { mutableStateOf(initialReportType) } // 0 = Tour Diary, 1 = Rajasthan TA Bill
 
     AlertDialog(
         onDismissRequest = onDismiss,
         title = {
             Column {
-                Text("Export Tour Diary PDF", fontWeight = FontWeight.Bold, fontSize = 18.sp)
-                Text("Monthly Forensic Tour Diary Report", fontSize = 12.sp, color = Color.Gray)
+                Text("Export Monthly Diary Details", fontWeight = FontWeight.Bold, fontSize = 18.sp)
+                Text("Select report parameters for $selectedMonth", fontSize = 12.sp, color = Color.Gray)
             }
         },
         text = {
-            Column {
-                Text("Generate single-page diary for month: $selectedMonth", fontSize = 13.sp)
-                Spacer(modifier = Modifier.height(14.dp))
-                Text("Choose statutory paper template size:", fontWeight = FontWeight.Bold, fontSize = 12.sp)
-
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(top = 8.dp),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
+                // Formatting Tab switcher
+                TabRow(
+                    selectedTabIndex = activeExportTab,
+                    modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)),
+                    containerColor = Color(0xFFF3EDF7)
                 ) {
-                    Card(
-                        modifier = Modifier
-                            .weight(1f)
-                            .clickable { selectedLegalSize = false },
-                        colors = CardDefaults.cardColors(
-                            containerColor = if (!selectedLegalSize) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface
-                        )
-                    ) {
-                        Column(
-                            modifier = Modifier.padding(10.dp),
-                            horizontalAlignment = Alignment.CenterHorizontally
-                        ) {
-                            Icon(Icons.Filled.Info, contentDescription = "Letter")
-                            Text("Letter Size", fontWeight = FontWeight.Bold, fontSize = 12.sp)
-                            Text("8.5\" x 11\"", fontSize = 10.sp, color = Color.Gray)
-                        }
-                    }
+                    Tab(
+                        selected = activeExportTab == 0,
+                        onClick = { activeExportTab = 0 },
+                        text = { Text("PDF Document", fontWeight = FontWeight.SemiBold, fontSize = 10.sp) },
+                        icon = { Icon(Icons.Filled.PictureAsPdf, contentDescription = "PDF format", modifier = Modifier.size(16.dp)) }
+                    )
+                    Tab(
+                        selected = activeExportTab == 1,
+                        onClick = { activeExportTab = 1 },
+                        text = { Text("Word .doc (Editable)", fontWeight = FontWeight.SemiBold, fontSize = 10.sp) },
+                        icon = { Icon(Icons.Filled.Description, contentDescription = "Word format", modifier = Modifier.size(16.dp)) }
+                    )
+                }
 
-                    Card(
-                        modifier = Modifier
-                            .weight(1f)
-                            .clickable { selectedLegalSize = true },
-                        colors = CardDefaults.cardColors(
-                            containerColor = if (selectedLegalSize) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface
-                        )
+                if (activeExportTab == 0) {
+                    // PDF Form Options
+                    Column(
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        Column(
-                            modifier = Modifier.padding(10.dp),
-                            horizontalAlignment = Alignment.CenterHorizontally
+                        Text(
+                            text = "Choose PDF Document Type:",
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 11.sp,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
                         ) {
-                            Icon(Icons.Filled.Share, contentDescription = "Legal")
-                            Text("Legal Size", fontWeight = FontWeight.Bold, fontSize = 12.sp)
-                            Text("8.5\" x 14\"", fontSize = 10.sp, color = Color.Gray)
+                            Card(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .clickable { reportType = 0 },
+                                colors = CardDefaults.cardColors(
+                                    containerColor = if (reportType == 0) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface
+                                ),
+                                border = BorderStroke(
+                                    1.dp,
+                                    if (reportType == 0) MaterialTheme.colorScheme.primary else Color.LightGray.copy(alpha = 0.5f)
+                                )
+                            ) {
+                                Column(
+                                    modifier = Modifier.padding(10.dp),
+                                    horizontalAlignment = Alignment.CenterHorizontally
+                                ) {
+                                    Icon(Icons.Filled.List, contentDescription = "Tour Diary", modifier = Modifier.size(20.dp))
+                                    Spacer(modifier = Modifier.height(4.dp))
+                                    Text("Tour Diary", fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                                    Text("Official (>=29km)", fontSize = 9.sp, color = Color.Gray)
+                                }
+                            }
+
+                            Card(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .clickable { reportType = 1 },
+                                colors = CardDefaults.cardColors(
+                                    containerColor = if (reportType == 1) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface
+                                ),
+                                border = BorderStroke(
+                                    1.dp,
+                                    if (reportType == 1) MaterialTheme.colorScheme.primary else Color.LightGray.copy(alpha = 0.5f)
+                                )
+                            ) {
+                                Column(
+                                    modifier = Modifier.padding(10.dp),
+                                    horizontalAlignment = Alignment.CenterHorizontally
+                                ) {
+                                    Icon(Icons.Filled.AccountBalanceWallet, contentDescription = "Road TA Bill", modifier = Modifier.size(20.dp))
+                                    Spacer(modifier = Modifier.height(4.dp))
+                                    Text("Rajasthan TA Bill", fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                                    Text("Full Claim Ledger", fontSize = 9.sp, color = Color.Gray)
+                                }
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(6.dp))
+
+                        Text(
+                            text = "Choose statutory paper size setup:",
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 11.sp,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            Card(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .clickable { selectedLegalSize = false },
+                                colors = CardDefaults.cardColors(
+                                    containerColor = if (!selectedLegalSize) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface
+                                ),
+                                border = BorderStroke(
+                                    1.dp,
+                                    if (!selectedLegalSize) MaterialTheme.colorScheme.primary else Color.LightGray.copy(alpha = 0.5f)
+                                )
+                            ) {
+                                Column(
+                                    modifier = Modifier.padding(10.dp),
+                                    horizontalAlignment = Alignment.CenterHorizontally
+                                ) {
+                                    Icon(Icons.Filled.InsertDriveFile, contentDescription = "Letter", modifier = Modifier.size(20.dp))
+                                    Spacer(modifier = Modifier.height(4.dp))
+                                    Text("Letter", fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                                    Text("8.5\" x 11\"", fontSize = 9.sp, color = Color.Gray)
+                                }
+                            }
+
+                            Card(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .clickable { selectedLegalSize = true },
+                                colors = CardDefaults.cardColors(
+                                    containerColor = if (selectedLegalSize) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface
+                                ),
+                                border = BorderStroke(
+                                    1.dp,
+                                    if (selectedLegalSize) MaterialTheme.colorScheme.primary else Color.LightGray.copy(alpha = 0.5f)
+                                )
+                            ) {
+                                Column(
+                                    modifier = Modifier.padding(10.dp),
+                                    horizontalAlignment = Alignment.CenterHorizontally
+                                ) {
+                                    Icon(Icons.Filled.InsertDriveFile, contentDescription = "Legal", modifier = Modifier.size(20.dp))
+                                    Spacer(modifier = Modifier.height(4.dp))
+                                    Text("Legal (Long)", fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                                    Text("8.5\" x 14\"", fontSize = 9.sp, color = Color.Gray)
+                                }
+                            }
+                        }
+
+                        Text(
+                            text = "PDF exports prioritize printing on a single page using a compressed layout vector grid.",
+                            fontSize = 10.sp,
+                            color = Color.Gray,
+                            lineHeight = 13.sp,
+                            modifier = Modifier.padding(top = 4.dp)
+                        )
+                    }
+                } else {
+                    // Word Form Options
+                    Column(
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Text(
+                            text = "Editable Word Document (.doc)",
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 12.sp,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        Text(
+                            text = "Generates a professional landscape structured document. The resulting file maintains full styling and is completely editable inside Office apps like Word, Google Docs, WPS, or LibreOffice.",
+                            fontSize = 11.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            lineHeight = 14.sp
+                        )
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .background(MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.3f), RoundedCornerShape(8.dp))
+                                .padding(10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Icon(Icons.Filled.CheckCircle, contentDescription = "Ready", tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(16.dp))
+                            Text(
+                                text = "Full table formatting & employee headers included.",
+                                fontSize = 10.sp,
+                                color = MaterialTheme.colorScheme.onSecondaryContainer,
+                                fontWeight = FontWeight.Medium
+                            )
                         }
                     }
                 }
             }
         },
         confirmButton = {
-            Button(onClick = { onConfirm(selectedLegalSize) }) {
+            Button(
+                onClick = {
+                    if (activeExportTab == 0) {
+                        onConfirmPdf(selectedLegalSize, reportType)
+                    } else {
+                        onConfirmWord()
+                    }
+                }
+            ) {
+                Icon(Icons.Filled.Share, contentDescription = "Export icon", modifier = Modifier.size(16.dp))
+                Spacer(modifier = Modifier.width(6.dp))
                 Text("Generate & Share")
             }
         },
@@ -2389,11 +3437,13 @@ fun PdfExportDialog(
 fun ProfileEditDialog(
     profile: EmployeeProfile,
     onDismiss: () -> Unit,
-    onSaveProfile: (String, String, String) -> Unit
+    onSaveProfile: (String, String, String, Int, String) -> Unit
 ) {
     var nameState by remember(profile) { mutableStateOf(profile.name) }
     var designationState by remember(profile) { mutableStateOf(profile.designation) }
     var postingState by remember(profile) { mutableStateOf(profile.posting) }
+    var basicSalaryState by remember(profile) { mutableStateOf(profile.basicSalary.toString()) }
+    var taCategoryState by remember(profile) { mutableStateOf(profile.taCategory) }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -2435,12 +3485,56 @@ fun ProfileEditDialog(
                     placeholder = { Text("e.g. Mobile Forensic Unit Jodhpur") },
                     singleLine = true
                 )
+
+                OutlinedTextField(
+                    value = basicSalaryState,
+                    onValueChange = {
+                        basicSalaryState = it
+                        val sal = it.trim().toIntOrNull() ?: 38000
+                        taCategoryState = com.example.utils.RajasthanTaRules.getCategoryBySalary(sal)
+                    },
+                    label = { Text("Basic Salary") },
+                    leadingIcon = { Icon(Icons.Filled.Star, contentDescription = "Basic Salary") },
+                    modifier = Modifier.fillMaxWidth(),
+                    keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+                        keyboardType = androidx.compose.ui.text.input.KeyboardType.Number
+                    ),
+                    singleLine = true
+                )
+
+                var categoryExpanded by remember { mutableStateOf(false) }
+                Box {
+                    OutlinedTextField(
+                        value = "Category $taCategoryState (DA: ₹${com.example.utils.RajasthanTaRules.getFullDaRate(taCategoryState).toInt()}/d)",
+                        onValueChange = {},
+                        readOnly = true,
+                        label = { Text("Rajasthan TA Category") },
+                        leadingIcon = { Icon(Icons.Filled.Info, contentDescription = "Category") },
+                        trailingIcon = { IconButton(onClick = { categoryExpanded = true }) { Icon(Icons.Filled.ArrowDropDown, "Select") } },
+                        modifier = Modifier.fillMaxWidth().clickable { categoryExpanded = true }
+                    )
+                    DropdownMenu(
+                        expanded = categoryExpanded,
+                        onDismissRequest = { categoryExpanded = false }
+                    ) {
+                        listOf("A", "B", "C", "D", "E").forEach { cat ->
+                            DropdownMenuItem(
+                                text = { Text("Category $cat (Full DA: ₹${com.example.utils.RajasthanTaRules.getFullDaRate(cat).toInt()})") },
+                                onClick = {
+                                    taCategoryState = cat
+                                    categoryExpanded = false
+                                }
+                            )
+                        }
+                    }
+                }
             }
         },
         confirmButton = {
             Button(
                 onClick = {
-                    onSaveProfile(nameState, designationState, postingState)
+                    val salInt = basicSalaryState.toIntOrNull() ?: 38000
+                    onSaveProfile(nameState, designationState, postingState, salInt, taCategoryState)
                     onDismiss()
                 }
             ) {
@@ -2458,8 +3552,10 @@ fun ProfileEditDialog(
 @Composable
 fun TourEntryEditDialog(
     entry: TourEntry,
+    profile: EmployeeProfile,
     onDismiss: () -> Unit,
-    onSave: (TourEntry) -> Unit
+    onSave: (TourEntry) -> Unit,
+    onDelete: () -> Unit
 ) {
     val context = LocalContext.current
     var dateState by remember(entry) { mutableStateOf(entry.date) }
@@ -2477,7 +3573,7 @@ fun TourEntryEditDialog(
     AlertDialog(
         onDismissRequest = onDismiss,
         title = {
-            Text("Modify Journey Entry", fontWeight = FontWeight.Bold, fontSize = 18.sp, color = MaterialTheme.colorScheme.primary)
+            Text(if (entry.id == 0L) "Insert Copied Journey (Editable)" else "Modify Journey Entry", fontWeight = FontWeight.Bold, fontSize = 18.sp, color = MaterialTheme.colorScheme.primary)
         },
         text = {
             Column(
@@ -2649,6 +3745,51 @@ fun TourEntryEditDialog(
                             )
                         }
                     }
+
+                    // Distance entry method helper (Manual vs Google Map KM)
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f), RoundedCornerShape(8.dp))
+                            .padding(8.dp)
+                    ) {
+                        Text(
+                            "KM Method:", 
+                            fontSize = 11.sp, 
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.weight(1f)
+                        )
+                        
+                        AssistChip(
+                            onClick = { /* User types in the input above */ },
+                            label = { Text("Manual", fontSize = 10.sp) },
+                            leadingIcon = { Icon(Icons.Filled.Edit, "manual icon", modifier = Modifier.size(12.dp)) },
+                            colors = AssistChipDefaults.assistChipColors(containerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.05f))
+                        )
+                        
+                        val stations = editCasesState.map { it.policeStation }.filter { it.isNotBlank() }
+                        AssistChip(
+                            onClick = {
+                                val hq = if (profile.posting.isNotBlank()) profile.posting else "HQ"
+                                val gDist = com.example.utils.RajasthanPoliceHelper.getGoogleMapsDistance(hq, stations)
+                                if (gDist > 0.0) {
+                                    distanceState = String.format(Locale.US, "%.1f", gDist)
+                                    Toast.makeText(context, "Calculated via Google Maps ($hq ➔ ${stations.joinToString(" ➔ ") { "PS $it" }} ➔ $hq): $gDist km", Toast.LENGTH_LONG).show()
+                                } else {
+                                    Toast.makeText(context, "Please enter visited Police Station(s) to fetch Google Maps distance!", Toast.LENGTH_SHORT).show()
+                                }
+                            },
+                            label = { Text("As per Google Map", fontSize = 10.sp) },
+                            leadingIcon = { Icon(Icons.Filled.Place, "maps icon", modifier = Modifier.size(12.dp), tint = MaterialTheme.colorScheme.primary) },
+                            colors = AssistChipDefaults.assistChipColors(
+                                containerColor = MaterialTheme.colorScheme.primaryContainer,
+                                labelColor = MaterialTheme.colorScheme.onPrimaryContainer
+                            )
+                        )
+                    }
                 }
 
                 OutlinedTextField(
@@ -2683,12 +3824,26 @@ fun TourEntryEditDialog(
                     onDismiss()
                 }
             ) {
-                Text("Save")
+                Text(if (entry.id == 0L) "Insert" else "Save")
             }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) {
-                Text("Cancel")
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (entry.id != 0L) {
+                    TextButton(
+                        onClick = {
+                            onDelete()
+                        },
+                        colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)
+                    ) {
+                        Icon(Icons.Filled.Delete, contentDescription = "Delete Journey Entry icon", modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("Delete", fontWeight = FontWeight.Bold)
+                    }
+                }
+                TextButton(onClick = onDismiss) {
+                    Text("Cancel")
+                }
             }
         }
     )
@@ -2727,7 +3882,7 @@ fun TravelModeChip(
 }
 
 /**
- * Native Android Sharing Intent Caller
+ * Native Android Sharing Intent Callers
  */
 fun sharePdfFile(context: Context, file: File) {
     val authority = "${context.packageName}.fileprovider"
@@ -2739,6 +3894,22 @@ fun sharePdfFile(context: Context, file: File) {
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         }
         context.startActivity(Intent.createChooser(shareIntent, "Share Monthly Tour Diary"))
+    } catch (e: Exception) {
+        e.printStackTrace()
+        Toast.makeText(context, "Sharing failed: ${e.message}", Toast.LENGTH_LONG).show()
+    }
+}
+
+fun shareDocFile(context: Context, file: File) {
+    val authority = "${context.packageName}.fileprovider"
+    try {
+        val fileUri: Uri = FileProvider.getUriForFile(context, authority, file)
+        val shareIntent = Intent(Intent.ACTION_SEND).apply {
+            type = "application/msword"
+            putExtra(Intent.EXTRA_STREAM, fileUri)
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        context.startActivity(Intent.createChooser(shareIntent, "Share Monthly Tour Diary (Word)"))
     } catch (e: Exception) {
         e.printStackTrace()
         Toast.makeText(context, "Sharing failed: ${e.message}", Toast.LENGTH_LONG).show()
@@ -3669,7 +4840,13 @@ fun CaseFormDialog(
                 item {
                     OutlinedTextField(
                         value = ps,
-                        onValueChange = { ps = it },
+                        onValueChange = { 
+                            ps = it
+                            val autoDist = com.example.utils.RajasthanPoliceHelper.getDistrict(it)
+                            if (!autoDist.isNullOrBlank() && dist.isBlank()) {
+                                dist = autoDist
+                            }
+                        },
                         label = { Text("Police Station (P.S.) *", fontSize = 12.sp) },
                         placeholder = { Text("e.g. West Crime Branch", fontSize = 12.sp) },
                         singleLine = true,

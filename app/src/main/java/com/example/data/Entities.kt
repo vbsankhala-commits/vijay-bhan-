@@ -8,7 +8,11 @@ data class EmployeeProfile(
     @PrimaryKey val id: Int = 1,
     val name: String = "",
     val designation: String = "",
-    val posting: String = ""
+    val posting: String = "",
+    val geminiApiKey: String = "",
+    val cloudBackupEmail: String = "",
+    val basicSalary: Int = 38000,
+    val taCategory: String = "D"
 )
 
 @Entity(tableName = "tour_entries")
